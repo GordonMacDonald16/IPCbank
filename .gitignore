@@ -50,3 +50,7 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+.vscode/launch.json
+.gitignore
+.vscode/tasks.json
+dbEditor
