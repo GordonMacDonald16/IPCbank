@@ -16,6 +16,7 @@
 #define MAX_FIELD_LENGTH 10
 
 
+volatile int dbSize;
 
 enum transaction_type{
     UPDATE_DB = 0,
@@ -44,10 +45,6 @@ struct transaction
     int value;
 };
 
-struct db_info{
-    int dbSize;
-    struct account_info *accounts;
-};
 
 void execute_transaction(struct transaction *command)
 {
@@ -82,13 +79,12 @@ void execute_transaction(struct transaction *command)
 //Refresh the accounts array by allocating space for the current acocunts
 //return pointer to the first account
 //**************CALLER MUST FREE THE POINTER THAT IS RETURNED**********
-struct db_info *pullFromDb(){
-    int dbSize = 0;
+struct account_info *pullFromDb(){
+    dbSize = 0;
 
     char line[DB_CAPACITY][MAX_FIELD_LENGTH * MAX_ARGUMENTS];
     FILE *db = fopen(DB_PATH, "r");
     struct account_info *accounts = (struct account_info *)malloc(DB_CAPACITY * sizeof(struct account_info));
-    struct db_info db_info;
 
     if (db == NULL)
     {
@@ -104,7 +100,6 @@ struct db_info *pullFromDb(){
         printf("DB SERVER read into memory : %s", line[dbSize]);
         dbSize++;
     }
-    db_info->dbSize = dbSize;
 
     for(int i = 0; i < dbSize; i++){
 
@@ -124,32 +119,10 @@ struct db_info *pullFromDb(){
     }
 
     fclose(db);
-    db_info->accounts = accounts;
-    return db_info;
+    return accounts;
 }
 
-//Writes the linked list of accounts to the database
 
-void pushToDb(struct account_info *accounts){
-    /**
-     * Open db file to read/write from/to
-     */
-    FILE *db = fopen(DB_PATH, "r");
-
-    if (db == NULL)
-    {
-        printf("Failed to open db file\n");
-        return;
-    }
-
-    while(accounts != NULL){
-        fprintf(db, "%s,%d,%.2f \n", accounts->acc_num, accounts->pin, accounts->balance);
-        accounts++;
-    }
-
-    fclose(db);
-
-}
 
 
 int main(int argc, char *argv[])
@@ -199,9 +172,9 @@ int main(int argc, char *argv[])
     }
 
 
+    //testing pull
+    //struct account_info *accounts = pullFromDb();
 
-
-    pushToDb(accounts);
 
     printf("DB SERVER : message queue ready to receive messages.\n");
 
