@@ -1,5 +1,5 @@
 # Makefile
-TARGETS = dbServer dbEditor
+TARGETS = dbServer dbEditor atm
 
 CC_C = $(CROSS_TOOL)gcc
 
