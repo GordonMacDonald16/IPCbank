@@ -221,16 +221,18 @@ void execute_transaction(struct transaction *command)
                 {
                     pin_ok = true;
                     currentAccount = &accounts[i];
+                    badAttempts = 0;
                     replyToAtm(PIN_OK,NULL);
 
                 }else{
-                    accounts[i].failedAccessAttempts++;
+                    badAttempts++;
                     //check if reached threshold attempts of 3
-                    if(accounts[i].failedAccessAttempts > 2){
+                    if(badAttempts > 2){
                         printf("DB SERVER : locking account %s", accounts[i].acc_num);
                         //block the account
                         accounts[i].acc_num[0] = 'x';
                         pushToDb(accounts);
+                        badAttempts = 0;
                     }
                 }
             }
@@ -317,6 +319,7 @@ int main(int argc, char *argv[])
         execv(args[0], args);
         
     }
+    
 
     // We must be the parent
     printf("I am the parent, waiting for child to end.\n");
@@ -341,11 +344,9 @@ int main(int argc, char *argv[])
     }
 
 
-    //pull, pass to execute witha  conditional that checks for the argument to be null
-    //struct account_info *accounts = pullFromDb();
-
-
     printf("DB SERVER : message queue ready to receive messages.\n");
+
+    badAttempts = 0;
 
     for (;;)
     {
@@ -424,7 +425,6 @@ int main(int argc, char *argv[])
                 if (element == NULL) break;
                 //store and immediately "encrypt" the pin
                 transaction->account.pin = atoi(element) - 1;
-
                 break;}
             case 3:{ //parsing the funds
                 char *element = strtok(NULL, ",");
@@ -442,7 +442,6 @@ int main(int argc, char *argv[])
             }
                     
         }
-
         //execute the transaction
         execute_transaction(transaction);
         free(transaction);
