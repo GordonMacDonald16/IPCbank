@@ -8,15 +8,19 @@
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <string.h>
+#include <stdbool.h>
 
 #define PERMS 0644 
 #define DB_PATH "db.txt"
 #define MAX_ARGUMENTS 3
 #define DB_CAPACITY 25
 #define MAX_FIELD_LENGTH 10
+#define ATM_QUEUE "msgq-atm.txt"
 
 
 volatile int dbSize;
+volatile int badAttempts;
+struct account_info *currentAccount = NULL;
 
 enum transaction_type{
     UPDATE_DB = 0,
@@ -36,6 +40,7 @@ struct account_info{
     char acc_num[MAX_FIELD_LENGTH];
     int pin;
     float balance;
+    int failedAccessAttempts;
 };
 
 struct transaction
@@ -45,40 +50,67 @@ struct transaction
     int value;
 };
 
+enum reply_type{
+    PIN_WRONG = 0,
+    PIN_OK = 1,
+    BALANCE_REPLY = 2,
+    NSF = 3,
+    FUNDS_OK = 4
+};
 
-void execute_transaction(struct transaction *command)
-{
-    /**
-     * Open db file to read/write from/to
-     */
-    FILE *db  = fopen(DB_PATH, "r+");
+void replyToAtm(enum reply_type reply, char *balance){
+    struct my_msgbuf buf;
+    int msqid;
+    int len;
+    key_t key;
 
-    if (db == NULL)
+    if ((key = ftok(ATM_QUEUE, 'B')) == -1)
     {
-        printf("Failed to open db file\n");
-        return;
+        perror("ftok");
+        exit(1);
     }
 
-    /**
-     * Complete transaction.
-     */
-    switch (command->action)
+    if ((msqid = msgget(key, PERMS | IPC_CREAT)) == -1)
     {
-    case UPDATE_DB:
-        fprintf(db, "%s,%d,%.2f \n", command->account.acc_num, command->account.pin, command->account.balance);
-        printf("Account added to DB: %s,%d,%.2f \n", command->account.acc_num, command->account.pin, command->account.balance);
+        perror("msgget");
+        exit(1);
+    }
+
+    buf.mtype = 1; /* we don't really care in this case */
+
+
+    switch (reply)
+    {
+    case PIN_WRONG:
+        strcpy(buf.mtext, "PIN_WRONG");
+        break;
+    case PIN_OK:
+        strcpy(buf.mtext, "PIN_OK");
+        break;
+    case NSF:
+        strcpy(buf.mtext, "NSF");
+        break;
+    case BALANCE:{
+        strcat(strcpy(buf.mtext, "BALANCE,"), balance);
+ 
+        break;}
+    case FUNDS_OK:
+        strcat(strcpy(buf.mtext, "FUNDS_OK,"), balance);
         break;
     default:
-        printf("Unrecognized command attempted. Please try again.");
         break;
     }
-    //close database file when finished executing trans
-    fclose(db);
+
+    len = strlen(buf.mtext);
+    if (msgsnd(msqid, &buf, len + 1, 0) == -1) /* +1 for '\0' */
+        perror("msgsnd");
+
 }
+
 
 //Refresh the accounts array by allocating space for the current acocunts
 //return pointer to the first account
-//**************CALLER MUST FREE THE POINTER THAT IS RETURNED**********
+//**************PUSH MUST FREE THE POINTER THAT IS RETURNED**********
 struct account_info *pullFromDb(){
     dbSize = 0;
 
@@ -97,7 +129,9 @@ struct account_info *pullFromDb(){
     {
         /* note that fgets don't strip the terminating \n, checking its
         presence would allow to handle lines longer that sizeof(line) */
-        printf("DB SERVER read into memory : %s", line[dbSize]);
+
+        //debug print statement
+        printf("DB SERVER read into memory : %s \n", line[dbSize]);
         dbSize++;
     }
 
@@ -109,26 +143,163 @@ struct account_info *pullFromDb(){
 
         //get next element
         char *pin_ptr = strtok(NULL, ",");
-        //store the CYPHERTEXT PIN (STILL ENCRYPTED ie. this value subtract 1 is the plaintext pin)
+        //store the CYPHERTEXT PIN (STILL ENCRYPTED ie. this value plus 1 is the plaintext pin)
         accounts[i].pin = atoi(pin_ptr);
 
         //get next element
         char *balance_ptr = strtok(NULL, ",");
         accounts[i].balance = atof(balance_ptr);
-
     }
 
     fclose(db);
     return accounts;
 }
 
+//Writes the linked list of accounts to the database.
+//******FREES THE ACCOUNTS POINTER*********
+void pushToDb(struct account_info *accounts)
+{
+    /**
+     * Open db file to read/write from/to
+     */
+    FILE *db = fopen(DB_PATH, "w+");
+
+    if (db == NULL)
+    {
+        printf("Failed to open db file\n");
+        return;
+    }
+    int i;
+    for(i = 0; i < dbSize; i++){
+        fprintf(db, "%s,%d,%.2f\n", accounts[i].acc_num, accounts[i].pin, accounts[i].balance);
+    }
+
+    fclose(db);
+}
 
 
+//Execute the transaction argument
+void execute_transaction(struct transaction *command)
+{
+    /**
+     * Complete transaction.
+     */
+    switch (command->action)
+    {
+    case UPDATE_DB:
+    {
+        /**
+     * Open db file to read/write from/to
+     */
+        FILE *db = fopen(DB_PATH, "a");
+
+        if (db == NULL)
+        {
+            printf("Failed to open db file\n");
+            return;
+        }
+
+        fprintf(db, "%s,%d,%.2f\n", command->account.acc_num, command->account.pin, command->account.balance);
+        printf("Account added to DB: %s,%d,%.2f \n", command->account.acc_num, command->account.pin, command->account.balance);
+        //close database file when finished executing update
+        fclose(db);
+        break;
+    }
+    case PIN:
+    {
+        struct account_info *accounts = pullFromDb();
+        int i;
+        bool pin_ok = false;
+
+        //look for account
+        for (i = 0; i < dbSize; i++)
+        {
+            if (strncmp(accounts[i].acc_num, command->account.acc_num, MAX_FIELD_LENGTH) == 0)
+            { //found account
+                //compare against excrypted pin
+                if (accounts[i].pin == command->account.pin)
+                {
+                    pin_ok = true;
+                    currentAccount = &accounts[i];
+                    badAttempts = 0;
+                    replyToAtm(PIN_OK,NULL);
+
+                }else{
+                    badAttempts++;
+                    //check if reached threshold attempts of 3
+                    if(badAttempts > 2){
+                        printf("DB SERVER : locking account %s", accounts[i].acc_num);
+                        //block the account
+                        accounts[i].acc_num[0] = 'x';
+                        pushToDb(accounts);
+                        badAttempts = 0;
+                    }
+                }
+            }
+        }
+        if (!pin_ok)
+        {
+            replyToAtm(PIN_WRONG,NULL);
+        }
+
+        //write the modified accounts back into the db file
+        //pushToDb(accounts);
+        break;
+    }
+    case BALANCE:
+    {
+        if(currentAccount != NULL){
+            char balance[MAX_FIELD_LENGTH];
+            replyToAtm(BALANCE_REPLY, gcvt(currentAccount->balance, MAX_FIELD_LENGTH, balance));
+        }else{
+            //Invalid action. User hasnt logged into an account.
+            replyToAtm(PIN_WRONG,NULL);
+        }
+
+        break;
+    }
+    case WITHDRAW:
+    {
+        if (currentAccount != NULL)
+        {
+            struct account_info *accounts = pullFromDb();
+
+            float amountToWithdraw = command->account.balance;
+
+            int i;
+            for(i = 0; i < dbSize; i++){
+                if(strncmp(accounts[i].acc_num, currentAccount->acc_num, MAX_FIELD_LENGTH) == 0){
+
+                    if (accounts[i].balance - amountToWithdraw >= 0){
+                        accounts[i].balance = accounts[i].balance - amountToWithdraw;
+                        currentAccount->balance = currentAccount->balance - amountToWithdraw;
+                        char balanceBuf[MAX_FIELD_LENGTH];
+                        replyToAtm(FUNDS_OK,gcvt(accounts[i].balance, MAX_FIELD_LENGTH, balanceBuf));
+                    }else{
+                        replyToAtm(NSF,NULL);
+                    }
+                }
+            }
+            pushToDb(accounts);
+        }
+        else
+        {
+            printf("Operation attempted by ATM without logging into an account.");
+        }
+
+        break;
+    }
+    default:
+        printf("Unrecognized command attempted. Please try again.");
+        break;
+    }
+
+}
 
 int main(int argc, char *argv[])
 {
 
-    system("touch msgq.txt");
+    //system("touch msgq-editor.txt");
 
     sleep(5);
     printf("I am DATABASE_SERVER, process id: %d\n", (int)getpid());
@@ -148,6 +319,7 @@ int main(int argc, char *argv[])
         execv(args[0], args);
         
     }
+    
 
     // We must be the parent
     printf("I am the parent, waiting for child to end.\n");
@@ -158,8 +330,8 @@ int main(int argc, char *argv[])
     int toend;
     key_t key;
 
-    //generate key for msg queue
-    if ((key = ftok("msgq.txt", 'B')) == -1)
+    //generate key for msg queue from editor
+    if ((key = ftok("msgq-editor.txt", 'B')) == -1)
     {
         perror("ftok");
         exit(1);
@@ -172,11 +344,9 @@ int main(int argc, char *argv[])
     }
 
 
-    //testing pull
-    //struct account_info *accounts = pullFromDb();
-
-
     printf("DB SERVER : message queue ready to receive messages.\n");
+
+    badAttempts = 0;
 
     for (;;)
     {
@@ -214,6 +384,7 @@ int main(int argc, char *argv[])
                 else if (strcmp(element, "BALANCE") == 0)
                 {
                     transaction->action = BALANCE;
+                    break;
                 }
                 else if (strcmp(element, "WITHDRAW") == 0)
                 {
@@ -225,18 +396,35 @@ int main(int argc, char *argv[])
                     printf("Unrecognized command attempted, please try again.");
                 }
                 break;}
-            case 1: {//parsing the account number
-                char *element = strtok(NULL, ",");
-                strncpy(transaction->account.acc_num, element, MAX_FIELD_LENGTH);
-                transaction->account.acc_num[MAX_FIELD_LENGTH - 1] = '\0';
+            case 1: {
+                //See if its a withdraw command, then our second element is a withdraw value
+                if(transaction->action == WITHDRAW){
+                    char *element = strtok(NULL, ",");
+                    if (element == NULL)
+                        break;
+                    if (strstr(element, ".") != NULL)
+                    { //input is a float
+                        transaction->account.balance = atof(element);
+                    }
+                    else
+                    {
+                        transaction->value = atoi(element);
+                    }
+                }{
+                    //parsing the account number
+                    char *element = strtok(NULL, ",");
+                    if(element == NULL) break;
+                    strncpy(transaction->account.acc_num, element, MAX_FIELD_LENGTH);
+                    //null terminate string
+                    transaction->account.acc_num[MAX_FIELD_LENGTH - 1] = '\0';
+                }
 
                 break;}
             case 2: {//parsing the  (plaintext) pin
                 char *element = strtok(NULL, ",");
-
+                if (element == NULL) break;
                 //store and immediately "encrypt" the pin
-                transaction->account.pin = atoi(element) + 1;
-
+                transaction->account.pin = atoi(element) - 1;
                 break;}
             case 3:{ //parsing the funds
                 char *element = strtok(NULL, ",");
@@ -254,19 +442,14 @@ int main(int argc, char *argv[])
             }
                     
         }
-
         //execute the transaction
         execute_transaction(transaction);
         free(transaction);
-
-
-
     }
 
 
 
     printf("DB SERVER : message queue done receiving messages.\n");
-    system("rm msgq.txt");
 
     int status = 0;
     pid_t childpid = wait(&status);

@@ -22,7 +22,7 @@ int main(void)
     int len;
     key_t key;
 
-    if ((key = ftok("msgq.txt", 'B')) == -1)
+    if ((key = ftok("msgq-editor.txt", 'B')) == -1)
     {
         perror("ftok");
         exit(1);
@@ -58,6 +58,7 @@ int main(void)
         perror("msgctl");
         exit(1);
     }
+    
     printf("DB EDITOR message queue: done sending messages.\n");
     return 0;
 }
