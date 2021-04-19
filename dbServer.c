@@ -9,6 +9,7 @@
 #include <sys/msg.h>
 #include <string.h>
 #include <stdbool.h>
+#include <sys/sem.h>
 
 #define PERMS 0644 
 #define DB_PATH "db.txt"
@@ -16,11 +17,15 @@
 #define DB_CAPACITY 25
 #define MAX_FIELD_LENGTH 10
 #define ATM_QUEUE "msgq-atm.txt"
+#define SEM_DB_LOCK_FNAME "/mydblock"
+#define IPC_ERROR -1
+#define SEMOP_BLOCKING 0
 
 
 volatile int dbSize;
 volatile int badAttempts;
 struct account_info *currentAccount = NULL;
+int s_mutex;
 
 enum transaction_type{
     UPDATE_DB = 0,
@@ -57,6 +62,49 @@ enum reply_type{
     NSF = 3,
     FUNDS_OK = 4
 };
+
+int SemaphoreWait(int semid, int iMayBlock)
+{
+    struct sembuf sbOperation;
+    sbOperation.sem_num = 0;
+    sbOperation.sem_op = -1;
+    sbOperation.sem_flg = iMayBlock;
+    return semop(semid, &sbOperation, 1);
+}
+int SemaphoreSignal(int semid)
+{
+    struct sembuf sbOperation;
+    sbOperation.sem_num = 0;
+    sbOperation.sem_op = +1;
+    sbOperation.sem_flg = 0;
+    return semop(semid, &sbOperation, 1);
+}
+
+void SemaphoreRemove(int semid)
+{
+    if (semid != IPC_ERROR)
+        semctl(semid, 0, IPC_RMID, 0);
+}
+
+int SemaphoreCreate(int iInitialValue)
+{
+    int semid;
+    union semun suInitData;
+    int iError;
+    /* get a semaphore */
+    semid = semget(IPC_PRIVATE, 1, SEM_A);
+    /* check for errors */
+    if (semid == IPC_ERROR)
+        return semid;
+    /* now initialize the semaphore */
+    suInitData.val = iInitialValue;
+    if (semctl(semid, 0, SETVAL, suInitData) == IPC_ERROR)
+    { /* error occurred, so remove semaphore */
+        SemaphoreRemove(semid);
+        return IPC_ERROR;
+    }
+    return semid;
+}
 
 void replyToAtm(enum reply_type reply, char *balance){
     struct my_msgbuf buf;
@@ -223,7 +271,6 @@ void execute_transaction(struct transaction *command)
                     currentAccount = &accounts[i];
                     badAttempts = 0;
                     replyToAtm(PIN_OK,NULL);
-
                 }else{
                     badAttempts++;
                     //check if reached threshold attempts of 3
@@ -298,8 +345,13 @@ void execute_transaction(struct transaction *command)
 
 int main(int argc, char *argv[])
 {
-
-    //system("touch msgq-editor.txt");
+    //Creating semaphore, check for error
+    if ((s_mutex = SemaphoreCreate(1)) == IPC_ERROR)
+    {
+        SemaphoreRemove(s_mutex);
+        printf("DB SERVER : Error in SemaphoreCreate");
+        exit(1);
+    }
 
     sleep(5);
     printf("I am DATABASE_SERVER, process id: %d\n", (int)getpid());
@@ -442,8 +494,19 @@ int main(int argc, char *argv[])
             }
                     
         }
+
+        int wait = SemaphoreWait(s_mutex, SEMOP_BLOCKING);
+        if(wait == IPC_ERROR){
+            printf("Error waiting on semaphore");
+        }
         //execute the transaction
         execute_transaction(transaction);
+
+        int signal = SemaphoreSignal(s_mutex);
+        if (signal == IPC_ERROR)
+        {
+            printf("Error waiting on semaphore");
+        }
         free(transaction);
     }
 
