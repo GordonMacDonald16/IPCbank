@@ -1,33 +1,54 @@
 ### IPCbank
 # Multiprocess C application for simulating an ATM system
+Author : Gordon MacDonald
 
 ## Build and Running
-- navigate to the main application directory that contains the files: dbServer.c, dbEditor.c, Makefile, Readme.md(this), msgq-atm.txt, msgq-editor.txt and db.txt
+- navigate to the main application directory that contains the files: dbServer.c, dbEditor.c, atm.c, interest.c, Makefile, Readme.md(this), msgq-atm.txt, msgq-editor.txt and db.txt
 - run the following commands in cmd (within project directory):
 >>make
 >>.\dbServer
 
-You will be promted with the dbEditor (dbServer spawns the dbEditor) shell to enter UPDATE_DB commands which allow an admin user to add account entries to the database (db.txt).
+You will be promted with the dbEditor (dbServer spawns the dbEditor) shell to enter UPDATE_DB commands which allow an admin user to add account entries to the database (db.txt) this should be the only way that the db file is edited to ensure that each entry has a trailing newline character. It is essential that you run the dbServer prior to running either the interest process (iterates the db to apply 'interest' acrual), or any atm processes.
 
-To use Atm.c:
+
+
+
+To use atm.c:
 -open a second instance of cmd, run make
 -run atm : ./atm
+
+To use interest.c:
+-open a second instance of cmd, run make
+-run atm : ./interest
+This will initiate the countdown timer, when 1 minute elapses it will interate the db and accrue interest on the accounts.
+
 
 ## Testing:
 	A test case file has been provided: testCase1.txt that contains steps for testing the system. I have included a sample output from both processes to show what the proper output should look like after executing the test (testOutput.png)
 
 ## Current Features:
-	-Full dbEditor and dbServer relationship.
-	-Atm can perform 'login' (PIN message) that is validated by dbServer
-	-dbServer will block an account after 3 consecutive failed access attempts
+	-Full dbEditor and dbServer relationship. dbEditor can be used to add accounts to db and should be the only way that accounts are modified.
+	-atm can perform 'login' (PIN message) that is validated by dbServer.
+	-dbServer will block an account after 3 consecutive failed access attempts.
+	-atm can check the balance of the account if they have a successful login
+	-atm can withdraw available funds and is served with an NSF if the funds are insufficient.
+	-interest will iterate every 60 seconds through the db (if the resource semaphore lock is available) and apply an increase of 1% to positive account balances and a decrease of 2% to negative account balances.
   
 ## Missing Features:
-	-Currently dealing with a bug that is preventing the balance and withdraw message replies from being sent back from the dbServer. (This is apparent when attempting a BALANCE command after a successful PIN command)
+	-Timestamps in event prints
+	-BONUS: Admin Security Operations (Through the dbEditor)
+			-Remote kill switch: 
+				The dbEditor will be able to kill any live atm instances with 3 consecutive failed login attempts.
+			-Remote db lock
+				The dbEditor will be able to remotely activate a lock on the db to prevent modification by any processes.
+
+	
 
 ## Troubleshooting:
-	-We use token files to link the msg queues between processes, these files must exist for the system to run(msgq-editor.txt, msgq-atm.txt)
+	-We use token files to link the msg queues and semaphores between processes, these files MUST exist for the system to run(msgq-editor.txt, msgq-atm.txt, db-semaphore.)
 	-If the queues are out of sync they will complain about missing identifiers. Just kill the running processes and re-run dbServer and atm.
 	-To exit any running processes that are waiting for input press ctrl-d
 	-If stuck in loop the global escape is ctrl-c
+	-If the interest process is stuck trying to claim the db sem lock. That means dbServer needs to be run first. Kill interest with ctrl-c and run dbServer prior to restarting interest.
 
 
