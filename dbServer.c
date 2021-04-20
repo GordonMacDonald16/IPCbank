@@ -9,6 +9,7 @@
 #include <sys/msg.h>
 #include <string.h>
 #include <stdbool.h>
+#include <sys/sem.h>
 
 #define PERMS 0644 
 #define DB_PATH "db.txt"
@@ -16,11 +17,14 @@
 #define DB_CAPACITY 25
 #define MAX_FIELD_LENGTH 10
 #define ATM_QUEUE "msgq-atm.txt"
+#define IPC_ERROR -1
+#define DB_SEM_FNAME "db-semaphore.txt"
 
 
 volatile int dbSize;
 volatile int badAttempts;
 struct account_info *currentAccount = NULL;
+int s_mutex;
 
 enum transaction_type{
     UPDATE_DB = 0,
@@ -57,6 +61,57 @@ enum reply_type{
     NSF = 3,
     FUNDS_OK = 4
 };
+
+int SemaphoreWait(int semid, int iMayBlock)
+{
+    struct sembuf sbOperation;
+    sbOperation.sem_num = 0;
+    sbOperation.sem_op = -1;
+    sbOperation.sem_flg = iMayBlock;
+    return semop(semid, &sbOperation, 1);
+}
+int SemaphoreSignal(int semid)
+{
+    struct sembuf sbOperation;
+    sbOperation.sem_num = 0;
+    sbOperation.sem_op = +1;
+    sbOperation.sem_flg = 0;
+    return semop(semid, &sbOperation, 1);
+}
+
+void SemaphoreRemove(int semid)
+{
+    if (semid != IPC_ERROR)
+        semctl(semid, 0, IPC_RMID, 0);
+}
+
+int SemaphoreCreate(int iInitialValue)
+{
+    int semid;
+    union semun suInitData;
+
+    key_t key;
+
+    if ((key = ftok(DB_SEM_FNAME, 'B')) == -1)
+    {
+        perror("ftok");
+        exit(1);
+    }
+    //int iError;
+    /* get a semaphore */
+    semid = semget(key, 1, PERMS | IPC_CREAT);
+    /* check for errors */
+    if (semid == IPC_ERROR)
+        return semid;
+    /* now initialize the semaphore */
+    suInitData.val = iInitialValue;
+    if (semctl(semid, 0, SETVAL, suInitData) == IPC_ERROR)
+    { /* error occurred, so remove semaphore */
+        SemaphoreRemove(semid);
+        return IPC_ERROR;
+    }
+    return semid;
+}
 
 void replyToAtm(enum reply_type reply, char *balance){
     struct my_msgbuf buf;
@@ -223,7 +278,6 @@ void execute_transaction(struct transaction *command)
                     currentAccount = &accounts[i];
                     badAttempts = 0;
                     replyToAtm(PIN_OK,NULL);
-
                 }else{
                     badAttempts++;
                     //check if reached threshold attempts of 3
@@ -241,9 +295,6 @@ void execute_transaction(struct transaction *command)
         {
             replyToAtm(PIN_WRONG,NULL);
         }
-
-        //write the modified accounts back into the db file
-        //pushToDb(accounts);
         break;
     }
     case BALANCE:
@@ -298,8 +349,13 @@ void execute_transaction(struct transaction *command)
 
 int main(int argc, char *argv[])
 {
-
-    //system("touch msgq-editor.txt");
+    //Creating semaphore, check for error
+    if ((s_mutex = SemaphoreCreate(1)) == IPC_ERROR)
+    {
+        SemaphoreRemove(s_mutex);
+        printf("DB SERVER : Error in SemaphoreCreate");
+        exit(1);
+    }
 
     sleep(5);
     printf("I am DATABASE_SERVER, process id: %d\n", (int)getpid());
@@ -317,9 +373,7 @@ int main(int argc, char *argv[])
         printf("Spawned child with pid %d\n", (int)getpid());
         char * args[] = {"./dbEditor", NULL};
         execv(args[0], args);
-        
     }
-    
 
     // We must be the parent
     printf("I am the parent, waiting for child to end.\n");
@@ -393,7 +447,7 @@ int main(int argc, char *argv[])
                 else
                 {
                     //UNRECOGNIZED COMMAND
-                    printf("Unrecognized command attempted, please try again.");
+                    printf("Unrecognized command attempted, please try again.\n");
                 }
                 break;}
             case 1: {
@@ -442,8 +496,24 @@ int main(int argc, char *argv[])
             }
                     
         }
-        //execute the transaction
-        execute_transaction(transaction);
+
+        printf("DB SERVER : Attempting to claim db sem lock...\n");
+        int wait = SemaphoreWait(s_mutex, 0);
+        if(wait == IPC_ERROR){
+            printf("DB SERVER : Error waiting on semaphore\n");
+        }else{
+            printf("DB SERVER : Claimed db sem lock...\n");
+            //execute the transaction
+            execute_transaction(transaction);
+
+            int signal = SemaphoreSignal(s_mutex);
+            if (signal == IPC_ERROR)
+            {
+                printf("DB SERVER : Error signaling on semaphore\n");
+                exit(1);
+            }
+            printf("DB SERVER : Released db sem lock.\n");
+        }
         free(transaction);
     }
 
