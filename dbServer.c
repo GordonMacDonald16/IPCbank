@@ -88,7 +88,7 @@ void SemaphoreRemove(int semid)
 int SemaphoreCreate(int iInitialValue)
 {
     int semid;
-    union semun suInitData;
+    //union semun suInitData;
 
     key_t key;
 
@@ -104,8 +104,8 @@ int SemaphoreCreate(int iInitialValue)
     if (semid == IPC_ERROR)
         return semid;
     /* now initialize the semaphore */
-    suInitData.val = iInitialValue;
-    if (semctl(semid, 0, SETVAL, suInitData) == IPC_ERROR)
+    //suInitData.val = iInitialValue;
+    if (semctl(semid, 0, SETVAL, iInitialValue) == IPC_ERROR)
     { /* error occurred, so remove semaphore */
         SemaphoreRemove(semid);
         return IPC_ERROR;
@@ -301,7 +301,8 @@ void execute_transaction(struct transaction *command)
     {
         if(currentAccount != NULL){
             char balance[MAX_FIELD_LENGTH];
-            replyToAtm(BALANCE_REPLY, gcvt(currentAccount->balance, MAX_FIELD_LENGTH, balance));
+            snprintf(balance, MAX_FIELD_LENGTH, "%.2f", currentAccount->balance);
+            replyToAtm(BALANCE_REPLY, balance);
         }else{
             //Invalid action. User hasnt logged into an account.
             replyToAtm(PIN_WRONG,NULL);
@@ -325,7 +326,8 @@ void execute_transaction(struct transaction *command)
                         accounts[i].balance = accounts[i].balance - amountToWithdraw;
                         currentAccount->balance = currentAccount->balance - amountToWithdraw;
                         char balanceBuf[MAX_FIELD_LENGTH];
-                        replyToAtm(FUNDS_OK,gcvt(accounts[i].balance, MAX_FIELD_LENGTH, balanceBuf));
+                        snprintf(balanceBuf, MAX_FIELD_LENGTH, "%.2f", accounts[i].balance);
+                        replyToAtm(FUNDS_OK, balanceBuf);
                     }else{
                         replyToAtm(NSF,NULL);
                     }
