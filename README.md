@@ -3,7 +3,7 @@
 Author : Gordon MacDonald
 
 ## System Description
-This multiprocess C ATM simulator consists of 4 processes:
+This multiprocess C ATM simulator consists of 4 processes.
 
 	- dbServer : main server for the database. Waits for requests from other processes. Spawns a dbEditor process to offer admin operations.
 	- dbEditor : a shell interface for the user to perform admin operations such as:
