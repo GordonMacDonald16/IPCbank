@@ -343,13 +343,14 @@ void execute_transaction(struct transaction *command)
         }
         else
         {
-            printf("Operation attempted by ATM without logging into an account.");
+            printf("Operation attempted by ATM without logging into an account.\n");
+            replyToAtm(PIN_WRONG,NULL);
         }
 
         break;
     }
     default:
-        printf("Unrecognized command attempted. Please try again.");
+        printf("Unrecognized command attempted. Please try again.\n");
         break;
     }
 
@@ -359,11 +360,11 @@ void execute_transaction(struct transaction *command)
 void handleAtmKill(){
     int i;
     for(i = 0; i < MAX_ATM_INSTANCES && subscribedAtms[i] != 0; i++){
-        printf("DB SERVER : ATM KILL SIG received");
-        printf("DB SERVER : killing atm instance %d...", subscribedAtms[i]);
+        printf("DB SERVER : ATM KILL SIG received\n");
+        printf("DB SERVER : killing atm instance %d...\n", subscribedAtms[i]);
         int result = kill(subscribedAtms[i], SIGTERM);
         if(result == -1){
-            printf("DB SERVER : Failed to kill atm instance %d", subscribedAtms[i]);
+            printf("DB SERVER : Failed to kill atm instance %d\n", subscribedAtms[i]);
         }
     }
 }
@@ -400,7 +401,7 @@ int main(int argc, char *argv[])
     if ((s_mutex = SemaphoreCreate(1)) == IPC_ERROR)
     {
         SemaphoreRemove(s_mutex);
-        printf("DB SERVER : Error in SemaphoreCreate");
+        printf("DB SERVER : Error in SemaphoreCreate\n");
         exit(1);
     }
 

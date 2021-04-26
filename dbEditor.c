@@ -63,8 +63,5 @@ int main(void)
     }
     
     printf("DB EDITOR message queue: done sending messages.\n");
-
-    
-
     return 0;
 }
