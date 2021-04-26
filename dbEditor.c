@@ -6,6 +6,8 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
+#include <signal.h>
+#include <unistd.h>
 
 #define PERMS 0644
 
@@ -14,6 +16,7 @@ struct my_msgbuf
     long mtype;
     char mtext[200];
 };
+
 
 int main(void)
 {
@@ -60,5 +63,8 @@ int main(void)
     }
     
     printf("DB EDITOR message queue: done sending messages.\n");
+
+    
+
     return 0;
 }
