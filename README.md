@@ -43,6 +43,7 @@ To initiate interest.c:
 -open a second instance of cmd, run:
 
 >>./interest
+
 This will initiate the countdown timer, when 1 minute elapses it will interate the db and accrue interest on the accounts.
 
 
