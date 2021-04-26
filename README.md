@@ -70,6 +70,8 @@ BONUS Features: Admin Security Operations (for dbEditor in the event of security
 	
 
 ## Troubleshooting:
+- BUILD FAILURES : add/remove -D_POSIX_SOURCE to your CFLAGS in the Makefile.
+
 - We use token files to link the msg queues and semaphores between processes, these files MUST exist for the system to run(msgq-editor.txt, msgq-atm.txt, db-semaphore.txt)
 - If the queues are out of sync they will complain about missing identifiers. Just kill the running processes and re-run dbServer and atm.
 - To exit any running processes that are waiting for input press ctrl-d
