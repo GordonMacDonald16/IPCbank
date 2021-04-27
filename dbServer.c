@@ -21,12 +21,14 @@
 #define ATM_QUEUE "msgq-atm.txt"
 #define IPC_ERROR -1
 #define DB_SEM_FNAME "db-semaphore.txt"
-
+#define OUT_SEM_FNAME "out-semaphore.txt"
+#define OUT_PATH "output.txt"
 
 volatile int dbSize;
 volatile int badAttempts;
 struct account_info *currentAccount = NULL;
-int s_mutex;
+int db_mutex;
+int out_mutex;
 int subscribedAtms[MAX_ATM_INSTANCES];
 
 enum transaction_type{
@@ -91,14 +93,14 @@ void SemaphoreRemove(int semid)
         semctl(semid, 0, IPC_RMID, 0);
 }
 
-int SemaphoreCreate(int iInitialValue)
+int SemaphoreCreate(char fname[], int iInitialValue)
 {
     int semid;
     //union semun suInitData;
 
     key_t key;
 
-    if ((key = ftok(DB_SEM_FNAME, 'B')) == -1)
+    if ((key = ftok(fname, 'B')) == -1)
     {
         perror("ftok");
         exit(1);
@@ -371,7 +373,7 @@ void handleAtmKill(){
 
 //handler for the msg to lock the db file resource
 void handleLockDb(){
-    int wait = SemaphoreWait(s_mutex, 0);
+    int wait = SemaphoreWait(db_mutex, 0);
     if (wait == IPC_ERROR)
     {
         printf("DB SERVER : Error executing a remote lock on DB\n");
@@ -383,7 +385,7 @@ void handleLockDb(){
 //handler for the msg to unlock the db file resource
 void handleUnlockDb()
 {
-    int signal = SemaphoreSignal(s_mutex);
+    int signal = SemaphoreSignal(db_mutex);
     if (signal == IPC_ERROR)
     {
         printf("DB SERVER : Error executing remote unlock on DB\n");
@@ -395,18 +397,48 @@ void handleUnlockDb()
     }
 }
 
+//method that writes a status string to the output file for observing deadlock
+void writeToOut(char str[]){
+    FILE *out = fopen(OUT_PATH, "a");
+
+    if (out == NULL)
+    {
+        printf("Failed to open output file\n");
+        return;
+    }else{
+        char *temp = str;
+        fprintf(out,"%s\n", temp);
+        fclose(out);
+    }
+}
+
 int main(int argc, char *argv[])
 {
-    //Creating semaphore, check for error
-    if ((s_mutex = SemaphoreCreate(1)) == IPC_ERROR)
+    //Creating db file semaphore, check for error
+    if ((db_mutex = SemaphoreCreate(DB_SEM_FNAME,1)) == IPC_ERROR)
     {
-        SemaphoreRemove(s_mutex);
-        printf("DB SERVER : Error in SemaphoreCreate\n");
+        SemaphoreRemove(db_mutex);
+        printf("DB SERVER : Error in SemaphoreCreate for db semaphore\n");
+        exit(1);
+    }
+    //Creating output file semaphore, check for error
+    if ((out_mutex = SemaphoreCreate(OUT_SEM_FNAME, 1)) == IPC_ERROR)
+    {
+        SemaphoreRemove(out_mutex);
+        printf("DB SERVER : Error in SemaphoreCreate for output semaphore\n");
         exit(1);
     }
 
     sleep(5);
     printf("I am DATABASE_SERVER, process id: %d\n", (int)getpid());
+
+    //add initial state to the output file, if lock is available. Wait if not. Release when done.
+    SemaphoreWait(out_mutex, 0);
+    writeToOut("DATABASE SERVER : Claimed output lock...\n");
+    writeToOut("DATABASE SERVER STATE: READY\n");
+    writeToOut("DATABASE SERVER : Releasing output lock...\n");
+    SemaphoreSignal(out_mutex);
+
 
     pid_t pid = fork();
     srand((int)pid);
@@ -574,21 +606,41 @@ int main(int argc, char *argv[])
             //check for an admin command from dbEditor shell, if not then execute the transaction
             if (transaction->action != KILL && transaction->action != LOCK && transaction->action != UNLOCK)
             {
+                printf("DB SERVER : Attempting to claim output lock...\n");
+                SemaphoreWait(out_mutex, 0);
+                writeToOut("DB SERVER : Attempting to claim db sem lock...");
+
                 printf("DB SERVER : Attempting to claim db sem lock...\n");
-                int wait = SemaphoreWait(s_mutex, 0);
+                int wait = SemaphoreWait(db_mutex, 0);
                 if(wait == IPC_ERROR){
                     printf("DB SERVER : Error waiting on semaphore\n");
                 }else{
                     printf("DB SERVER : Claimed db sem lock...\n");
+                    writeToOut("DB SERVER : Claimed db sem lock...\n");
+                    SemaphoreSignal(out_mutex);
+
+                    //sleep used for making generating deadlock easier
+                    //sleep(30)
+
                     //execute the transaction
                     execute_transaction(transaction);
 
-                    int signal = SemaphoreSignal(s_mutex);
+                    //DEADLOCK GENERATING CALL BELOW HERE
+                    printf("DB SERVER : Attempting to claim output lock...\n");
+                    SemaphoreWait(out_mutex,0);
+                    writeToOut("DB SERVER : Transaction completed.");
+                    SemaphoreSignal(out_mutex);
+
+                    int signal = SemaphoreSignal(db_mutex);
                     if (signal == IPC_ERROR)
                     {
                         printf("DB SERVER : Error signaling on semaphore\n");
                         exit(1);
-                    }else{
+                    }else
+                    {
+                        SemaphoreWait(out_mutex, 0);
+                        writeToOut("DB SERVER : Released db sem lock.");
+                        SemaphoreSignal(out_mutex);
                         printf("DB SERVER : Released db sem lock.\n");
                     }
                 }
@@ -596,7 +648,6 @@ int main(int argc, char *argv[])
             }
         }
     }
-
 
 
     printf("DB SERVER : message queue done receiving messages.\n");
