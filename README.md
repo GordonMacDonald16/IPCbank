@@ -8,17 +8,17 @@ This multiprocess C ATM simulator consists of 4 processes:
 - dbServer : main server for the database. Waits for requests from other processes. Spawns a dbEditor process to offer admin operations.
 
 - dbEditor : a shell interface for the user to perform admin operations such as:
-		* UPDATE_DB,(acc_num),(pin),(bal) (Add entry to db with account number = acc_num, PIN = pin, balance = bal)
-		* KILL (Signal the dbServer to terminate any active atm instances.
-		* LOCK (Signal the dbServer to manually lock the database file from access.
-		* UNLOCK (Signal the dbServer to manually unlock the database file for access.
-		* ctrl-d to terminate dbServer and dbEditor. (changed from project requirements to reflect industry convention)
+- UPDATE_DB,(acc_num),(pin),(bal) (Add entry to db with account number = acc_num, PIN = pin, balance = bal)
+- KILL (Signal the dbServer to terminate any active atm instances.
+- LOCK (Signal the dbServer to manually lock the database file from access.
+- UNLOCK (Signal the dbServer to manually unlock the database file for access.
+- ctrl-d to terminate dbServer and dbEditor. (changed from project requirements to reflect industry convention)
 		
 - atm : an instance of an ATM terminal for users to login and perform actions on their account:
-		* PIN,(acc_num),(pin) (attempt to login to account=acc_num and PIN=pin)
+- PIN,(acc_num),(pin) (attempt to login to account=acc_num and PIN=pin)
 		Once receiving PIN_OK from dbServer...
-		* BALANCE (return balance of the account)
-		* WITHDRAW,(amnt) (withdraws amount-amnt from the account)
+- BALANCE (return balance of the account)
+- WITHDRAW,(amnt) (withdraws amount-amnt from the account)
 		
 - interest : an interest calculator that will execute every 60 seconds (from running) to accrue interest on the accounts in the database.
 	
