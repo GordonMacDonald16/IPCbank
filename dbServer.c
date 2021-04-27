@@ -429,7 +429,7 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    sleep(5);
+    sleep(2);
     printf("I am DATABASE_SERVER, process id: %d\n", (int)getpid());
 
     //add initial state to the output file, if lock is available. Wait if not. Release when done.
@@ -616,7 +616,7 @@ int main(int argc, char *argv[])
                     printf("DB SERVER : Error waiting on semaphore\n");
                 }else{
                     printf("DB SERVER : Claimed db sem lock...\n");
-                    writeToOut("DB SERVER : Claimed db sem lock...\n");
+                    writeToOut("DB SERVER : Claimed db sem lock.\n");
                     SemaphoreSignal(out_mutex);
 
                     //sleep used for making generating deadlock easier

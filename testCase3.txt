@@ -1,0 +1,16 @@
+Steps:
+from cmd line within project directory:
+>make
+>./dbServer
+
+launch a second instance of terminal and run the interest.c process:
+>./interest
+
+Once the interest process starts counting down, from the dbEditor (in dbServer window) enter:
+LOCK
+
+When 60 seconds elapses and the interest calculator attempts to unlock the database it will wait.
+Once you want to let the interest process into the database again, from the dbEditor enter:
+UNLOCK
+
+This test will also work with locking out an ATM transaction instead of the interest process.

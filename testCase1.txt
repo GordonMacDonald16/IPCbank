@@ -3,11 +3,25 @@ from cmd line within project directory:
 >make
 >./dbServer
 
-When prompted enter an update_db command:
+When prompted enter an update_db command:(make sure a record for account number 00005 doesnt exist)
 UPDATE_DB,00005,108,3443.22
 
 from a new cmd line instance:
 >./atm
 
-enter a PIN message:
+Enter a PIN message:
 PIN,00005,108
+
+Once getting a PIN_OK reply from the server...
+enter:
+BALANCE
+
+Once getting the balance reply from the server...
+enter:
+WITHDRAW,1000.00
+
+Once getting the FUNDS_OK reply from the server along with the new balance of the account...
+enter:
+WITHDRAW,5000.00
+
+You will be served an NSF.
