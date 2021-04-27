@@ -13,11 +13,13 @@
 #define MAX_FIELD_LENGTH 10
 #define IPC_ERROR -1
 #define DB_SEM_FNAME "db-semaphore.txt"
-
+#define OUT_SEM_FNAME "out-semaphore.txt"
+#define OUT_PATH "output.txt"
 
 //tracks dbSize which can change at any time due to ipc
 volatile int dbSize;
-int s_mutex;
+int db_mutex;
+int out_mutex;
 
 
 //structure for accounts
@@ -59,13 +61,13 @@ void SemaphoreRemove(int semid)
 
 //Creates a sem object from the linked token with dbServer 
 //(which must already have run to initialize)
-int SemaphoreCreate()
+int SemaphoreCreate(char fname[])
 {
     int semid;
 
     key_t key;
 
-    if ((key = ftok(DB_SEM_FNAME, 'B')) == -1)
+    if ((key = ftok(fname, 'B')) == -1)
     {
         perror("ftok");
         exit(1);
@@ -152,14 +154,35 @@ void pushToDb(struct account_info *accounts)
     fclose(db);
 }
 
+//method that writes a status string to the output file for observing deadlock
+void writeToOut(char str[])
+{
+    FILE *out = fopen(OUT_PATH, "a");
+
+    if (out == NULL)
+    {
+        printf("Failed to open output file\n");
+        return;
+    }
+    else
+    {
+        char *temp = str;
+        fprintf(out, "%s\n", temp);
+        fclose(out);
+    }
+}
+
 int main(int argc, char const *argv[])
 {
+    //get db file semaphore instance
+    db_mutex = SemaphoreCreate(DB_SEM_FNAME);
+    //get output file semaphore instance
+    out_mutex = SemaphoreCreate(OUT_SEM_FNAME);
 
-    s_mutex = SemaphoreCreate();
 
     //check error. dbServer must be running to initialize the semaphore lock
-    if(s_mutex == IPC_ERROR){
-        printf("INTEREST : Failed to link with sem lock. \n\
+    if(db_mutex == IPC_ERROR || out_mutex == IPC_ERROR){
+        printf("INTEREST : Failed to link with dbServer sem locks. \n\
         Please ensure that dbServer is running without errors.\n");
         exit(1);
         }
@@ -170,13 +193,25 @@ int main(int argc, char const *argv[])
         printf("INTEREST : Countdown started at 60 sec...\n");
         sleep(60);
 
+        //claim output file lock
+        int wait = SemaphoreWait(out_mutex,0);
+        if (wait == IPC_ERROR)
+        {
+            printf("INTEREST : Error waiting on output semaphore\n");
+        }
+        writeToOut("INTEREST : Claimed output lock.\n");
+        writeToOut("INTEREST : Attempting to claim db sem lock...\n");
+
+        //sleep needed to make it easier for timing the dbServer transaction execution to cause deadlock
+        //sleep(30);
+
         printf("INTEREST : Attempting to claim db sem lock...\n");
-        int waitResult = SemaphoreWait(s_mutex, 0);
+        int waitResult = SemaphoreWait(db_mutex, 0);
         if(waitResult == -1)
         {
             printf("INTEREST : Error waiting on semaphore\n");
         }else{
-            printf("INTEREST : Lock obtained. Applying interest accrual to db...\n");
+            printf("INTEREST : Claimed db lock. Applying interest accrual to db...\n");
             struct account_info *accounts = pullFromDb();
             int i;
             for(i = 0; i < dbSize; i++){
@@ -188,10 +223,11 @@ int main(int argc, char const *argv[])
                 }
             }
             pushToDb(accounts);
-            int sigResult = SemaphoreSignal(s_mutex);
+            int sigResult = SemaphoreSignal(db_mutex);
             if(sigResult == IPC_ERROR){
                 printf("INTEREST : Error signaling on semaphore\n");
             }else{
+                writeToOut("INTEREST : Released db sem lock.");
                 printf("INTEREST : Released db sem lock.\n");
                 printf("INTEREST : Restarting process...\n\n\n\n");
 
@@ -199,7 +235,12 @@ int main(int argc, char const *argv[])
                 char *args[] = {"./interest", NULL};
                 execv(args[0], args);
             }
-
+            writeToOut("INTEREST : Releasing out lock...");
+            int result = SemaphoreSignal(out_mutex);
+            if (result == IPC_ERROR)
+            {
+                printf("INTEREST : Error signaling on semaphore\n");
+            }
         }
     }
     return 1;
