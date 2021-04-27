@@ -10,11 +10,13 @@
 #include <string.h>
 #include <stdbool.h>
 #include <sys/sem.h>
+#include <signal.h>
 
 #define PERMS 0644 
 #define DB_PATH "db.txt"
 #define MAX_ARGUMENTS 3
 #define DB_CAPACITY 25
+#define MAX_ATM_INSTANCES 10
 #define MAX_FIELD_LENGTH 10
 #define ATM_QUEUE "msgq-atm.txt"
 #define IPC_ERROR -1
@@ -25,12 +27,16 @@ volatile int dbSize;
 volatile int badAttempts;
 struct account_info *currentAccount = NULL;
 int s_mutex;
+int subscribedAtms[MAX_ATM_INSTANCES];
 
 enum transaction_type{
     UPDATE_DB = 0,
     PIN = 1,
     BALANCE = 2,
-    WITHDRAW = 3
+    WITHDRAW = 3,
+    KILL = 4,
+    LOCK = 5,
+    UNLOCK = 6
 };
 
 struct my_msgbuf
@@ -337,16 +343,56 @@ void execute_transaction(struct transaction *command)
         }
         else
         {
-            printf("Operation attempted by ATM without logging into an account.");
+            printf("Operation attempted by ATM without logging into an account.\n");
+            replyToAtm(PIN_WRONG,NULL);
         }
 
         break;
     }
     default:
-        printf("Unrecognized command attempted. Please try again.");
+        printf("Unrecognized command attempted. Please try again.\n");
         break;
     }
 
+}
+
+//handler for the msg from editor to kill all running atm instances subscribed to this server
+void handleAtmKill(){
+    int i;
+    for(i = 0; i < MAX_ATM_INSTANCES && subscribedAtms[i] != 0; i++){
+        printf("DB SERVER : ATM KILL SIG received\n");
+        printf("DB SERVER : killing atm instance %d...\n", subscribedAtms[i]);
+        int result = kill(subscribedAtms[i], SIGTERM);
+        if(result == -1){
+            printf("DB SERVER : Failed to kill atm instance %d\n", subscribedAtms[i]);
+        }
+    }
+}
+
+//handler for the msg to lock the db file resource
+void handleLockDb(){
+    int wait = SemaphoreWait(s_mutex, 0);
+    if (wait == IPC_ERROR)
+    {
+        printf("DB SERVER : Error executing a remote lock on DB\n");
+    }else{
+        printf("DB SERVER : DB Locked\n");
+    }
+}
+
+//handler for the msg to unlock the db file resource
+void handleUnlockDb()
+{
+    int signal = SemaphoreSignal(s_mutex);
+    if (signal == IPC_ERROR)
+    {
+        printf("DB SERVER : Error executing remote unlock on DB\n");
+        exit(1);
+    }
+    else
+    {
+        printf("DB SERVER : DB Unlocked\n");
+    }
 }
 
 int main(int argc, char *argv[])
@@ -355,7 +401,7 @@ int main(int argc, char *argv[])
     if ((s_mutex = SemaphoreCreate(1)) == IPC_ERROR)
     {
         SemaphoreRemove(s_mutex);
-        printf("DB SERVER : Error in SemaphoreCreate");
+        printf("DB SERVER : Error in SemaphoreCreate\n");
         exit(1);
     }
 
@@ -381,6 +427,12 @@ int main(int argc, char *argv[])
     printf("I am the parent, waiting for child to end.\n");
     
     //DO DB SERVER MAIN LOOP
+
+ 
+    int i;
+    for(i = 0; i < sizeof subscribedAtms; i++){
+        subscribedAtms[i] = 0;
+    }
     struct my_msgbuf buf;
     int msqid;
     int toend;
@@ -416,107 +468,133 @@ int main(int argc, char *argv[])
         toend = strcmp(buf.mtext, "end");
         if (toend == 0)
             break;
-
-        struct transaction *transaction = (struct transaction *)malloc(sizeof(struct transaction));
+        if(buf.mtype == 2){ //handle subscription msg
         
-        int param_index;
-
-        for (param_index = 0; param_index <= MAX_ARGUMENTS; param_index++)
-        {
-            switch (param_index)
-            {
-            case 0:{
-                char *element = strtok(buf.mtext, ",");
-
-                if (strcmp(element, "UPDATE_DB") == 0)
-                {
-                    transaction->action = UPDATE_DB;
-                }
-                else if (strcmp(element, "PIN") == 0)
-                {
-                    transaction->action = PIN;
-                }
-
-                else if (strcmp(element, "BALANCE") == 0)
-                {
-                    transaction->action = BALANCE;
+            //add pid to the subscribed list
+            int i;
+            for(i = 0; i < sizeof(subscribedAtms); i++){
+                if(subscribedAtms[i] == 0){
+                    int temp = 0;
+                    sscanf(buf.mtext, "%d", &temp);
+                    subscribedAtms[i] = temp;
                     break;
                 }
-                else if (strcmp(element, "WITHDRAW") == 0)
-                {
-                    transaction->action = WITHDRAW;
-                }
-                else
-                {
-                    //UNRECOGNIZED COMMAND
-                    printf("Unrecognized command attempted, please try again.\n");
-                }
-                break;}
-            case 1: {
-                //See if its a withdraw command, then our second element is a withdraw value
-                if(transaction->action == WITHDRAW){
-                    char *element = strtok(NULL, ",");
-                    if (element == NULL)
-                        break;
-                    if (strstr(element, ".") != NULL)
-                    { //input is a float
-                        transaction->account.balance = atof(element);
-                    }
-                    else
-                    {
-                        transaction->value = atoi(element);
-                    }
-                }{
-                    //parsing the account number
-                    char *element = strtok(NULL, ",");
-                    if(element == NULL) break;
-                    strncpy(transaction->account.acc_num, element, MAX_FIELD_LENGTH);
-                    //null terminate string
-                    transaction->account.acc_num[MAX_FIELD_LENGTH - 1] = '\0';
-                }
-
-                break;}
-            case 2: {//parsing the  (plaintext) pin
-                char *element = strtok(NULL, ",");
-                if (element == NULL) break;
-                //store and immediately "encrypt" the pin
-                transaction->account.pin = atoi(element) - 1;
-                break;}
-            case 3:{ //parsing the funds
-                char *element = strtok(NULL, ",");
-                if(element != NULL){
-                    if(strstr(element, ".") != NULL)
-                    { //input is a float
-                        transaction->account.balance = atof(element);
-                    }else{
-                        transaction->value = atoi(element);
-                    }
-                }
-                break;}
-            default:
-                break;
             }
-                    
-        }
-
-        printf("DB SERVER : Attempting to claim db sem lock...\n");
-        int wait = SemaphoreWait(s_mutex, 0);
-        if(wait == IPC_ERROR){
-            printf("DB SERVER : Error waiting on semaphore\n");
         }else{
-            printf("DB SERVER : Claimed db sem lock...\n");
-            //execute the transaction
-            execute_transaction(transaction);
+            //handle the transaction
+            struct transaction *transaction = (struct transaction *)malloc(sizeof(struct transaction));
+            
+            int param_index;
 
-            int signal = SemaphoreSignal(s_mutex);
-            if (signal == IPC_ERROR)
+            for (param_index = 0; param_index <= MAX_ARGUMENTS; param_index++)
             {
-                printf("DB SERVER : Error signaling on semaphore\n");
-                exit(1);
+                switch (param_index)
+                {
+                case 0:{
+                    char *element = strtok(buf.mtext, ",");
+
+                    if (strcmp(element, "UPDATE_DB") == 0)
+                    {
+                        transaction->action = UPDATE_DB;
+                    }
+                    else if (strcmp(element, "PIN") == 0)
+                    {
+                        transaction->action = PIN;
+                    }
+
+                    else if (strcmp(element, "BALANCE") == 0)
+                    {
+                        transaction->action = BALANCE;
+                        break;
+                    }
+                    else if (strcmp(element, "WITHDRAW") == 0)
+                    {
+                        transaction->action = WITHDRAW;
+                    }
+                    else if (strcmp(element, "KILL") == 0){
+                        handleAtmKill();
+                        transaction->action = KILL;
+                    }
+                    else if (strcmp(element, "LOCK") == 0){
+                        handleLockDb();
+                        transaction->action = LOCK;
+                    }
+                        else
+                        {
+                            //UNRECOGNIZED COMMAND
+                            printf("Unrecognized command attempted, please try again.\n");
+                        }
+                    break;}
+                case 1: {
+                    //See if its a withdraw command, then our second element is a withdraw value
+                    if(transaction->action == WITHDRAW){
+                        char *element = strtok(NULL, ",");
+                        if (element == NULL)
+                            break;
+                        if (strstr(element, ".") != NULL)
+                        { //input is a float
+                            transaction->account.balance = atof(element);
+                        }
+                        else
+                        {
+                            transaction->value = atoi(element);
+                        }
+                    }{
+                        //parsing the account number
+                        char *element = strtok(NULL, ",");
+                        if(element == NULL) break;
+                        strncpy(transaction->account.acc_num, element, MAX_FIELD_LENGTH);
+                        //null terminate string
+                        transaction->account.acc_num[MAX_FIELD_LENGTH - 1] = '\0';
+                    }
+
+                    break;}
+                case 2: {//parsing the  (plaintext) pin
+                    char *element = strtok(NULL, ",");
+                    if (element == NULL) break;
+                    //store and immediately "encrypt" the pin
+                    transaction->account.pin = atoi(element) - 1;
+                    break;}
+                case 3:{ //parsing the funds
+                    char *element = strtok(NULL, ",");
+                    if(element != NULL){
+                        if(strstr(element, ".") != NULL)
+                        { //input is a float
+                            transaction->account.balance = atof(element);
+                        }else{
+                            transaction->value = atoi(element);
+                        }
+                    }
+                    break;}
+                default:
+                    break;
+                }
             }
-            printf("DB SERVER : Released db sem lock.\n");
+
+            //check for an admin command from dbEditor shell, if not then execute the transaction
+            if (transaction->action != KILL && transaction->action != LOCK && transaction->action != UNLOCK)
+            {
+                printf("DB SERVER : Attempting to claim db sem lock...\n");
+                int wait = SemaphoreWait(s_mutex, 0);
+                if(wait == IPC_ERROR){
+                    printf("DB SERVER : Error waiting on semaphore\n");
+                }else{
+                    printf("DB SERVER : Claimed db sem lock...\n");
+                    //execute the transaction
+                    execute_transaction(transaction);
+
+                    int signal = SemaphoreSignal(s_mutex);
+                    if (signal == IPC_ERROR)
+                    {
+                        printf("DB SERVER : Error signaling on semaphore\n");
+                        exit(1);
+                    }else{
+                        printf("DB SERVER : Released db sem lock.\n");
+                    }
+                }
+                free(transaction);
+            }
         }
-        free(transaction);
     }
 
 

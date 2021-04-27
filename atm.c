@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
+#include <stdbool.h>
 
 #define MAX_FIELD_LENGTH 10
 #define PERMS 0644
@@ -74,22 +75,25 @@ void waitForUserTransaction(){
         perror("msgget");
         exit(1);
     }
+    
+    buf.mtype = 1; /* we don't really care in this case */
+    
+
     printf("Perform operations on your account by sending commands such as: \n\
             \t\t BALANCE\n\
             \t\t WITHDRAW,amount \n\
             (^D to quit):\n");
-    buf.mtype = 1; /* we don't really care in this case */
 
-    while (fgets(buf.mtext, sizeof buf.mtext, stdin) != NULL)
-    {
-        len = strlen(buf.mtext);
-        /* remove newline at end, if it exists */
-        if (buf.mtext[len - 1] == '\n')
-            buf.mtext[len - 1] = '\0';
-        if (msgsnd(msqid, &buf, len + 1, 0) == -1) /* +1 for '\0' */
-            perror("msgsnd");
-        char *reply = waitForServerResponse();
-        char *type = strtok(reply, ",");
+        while (fgets(buf.mtext, sizeof buf.mtext, stdin) != NULL)
+        {
+            len = strlen(buf.mtext);
+            /* remove newline at end, if it exists */
+            if (buf.mtext[len - 1] == '\n')
+                buf.mtext[len - 1] = '\0';
+            if (msgsnd(msqid, &buf, len + 1, 0) == -1) /* +1 for '\0' */
+                perror("msgsnd");
+            char *reply = waitForServerResponse();
+            char *type = strtok(reply, ",");
 
             if (strncmp(type, "FUNDS_OK", MAX_FIELD_LENGTH) == 0)
         {
@@ -124,6 +128,8 @@ int main(int argc, char const *argv[])
     int len;
     key_t key;
 
+    bool isSubscribed = false;
+
     if ((key = ftok(SERVER_QUEUE, 'B')) == -1)
     {
         perror("ftok");
@@ -143,41 +149,54 @@ int main(int argc, char const *argv[])
             \t\t BALANCE,\n\
             \t\t WITHDRAW,amount \n\
             (^D to quit):\n");
-    buf.mtype = 1; /* we don't really care in this case */
-
-    while (fgets(buf.mtext, sizeof buf.mtext, stdin) != NULL)
+    //check if already subscribed to the dbServer, if not send a msgtype 0 to it.
+    if (!isSubscribed)
     {
+        buf.mtype = 2;
+        pid_t pid = getpid();
+        sprintf(buf.mtext, "%d", pid);
         len = strlen(buf.mtext);
-        /* remove newline at end, if it exists */
-        if (buf.mtext[len - 1] == '\n')
-            buf.mtext[len - 1] = '\0';
+        if (msgsnd(msqid, &buf, len + 1, 0) == -1) /* +1 for '\0' */
+            perror("msgsnd");
+        isSubscribed = true;
+    }
+
+        buf.mtype = 1; /* we don't really care in this case */
+    
+
+        while (fgets(buf.mtext, sizeof buf.mtext, stdin) != NULL)
+        {
+            len = strlen(buf.mtext);
+            /* remove newline at end, if it exists */
+            if (buf.mtext[len - 1] == '\n')
+                buf.mtext[len - 1] = '\0';
+            if (msgsnd(msqid, &buf, len + 1, 0) == -1) /* +1 for '\0' */
+                perror("msgsnd");
+
+            //get reply from server
+            char *reply = waitForServerResponse();
+
+            if (strncmp(reply, "PIN_OK", MAX_FIELD_LENGTH) == 0)
+            {
+                waitForUserTransaction();
+            }
+            else if (strncmp(reply, "PIN_WRONG", MAX_FIELD_LENGTH) == 0)
+            {
+                printf("ATM : Unsuccessful login attempt. \n \
+            Please try again, Warning: 3 consecutive failed attempts will lock the account\n");
+                char *args[] = {"./atm", NULL};
+                //run itself from main loop again...
+                execv(args[0], args);
+            }
+        }
+        strcpy(buf.mtext, "end");
+        len = strlen(buf.mtext);
         if (msgsnd(msqid, &buf, len + 1, 0) == -1) /* +1 for '\0' */
             perror("msgsnd");
 
-        //get reply from server
-        char *reply = waitForServerResponse();
-
-        if (strncmp(reply, "PIN_OK", MAX_FIELD_LENGTH) == 0)
+        if (msgctl(msqid, IPC_RMID, NULL) == -1)
         {
-            waitForUserTransaction();
-        }
-        else if (strncmp(reply, "PIN_WRONG", MAX_FIELD_LENGTH) == 0)
-        {
-            printf("ATM : Unsuccessful login attempt. \n \
-            Please try again, Warning: 3 consecutive failed attempts will lock the account\n");
-            char *args[] = {"./atm", NULL};
-            //run itself from main loop again...
-            execv(args[0], args);
+            perror("msgctl");
+            exit(1);
         }
     }
-    strcpy(buf.mtext, "end");
-    len = strlen(buf.mtext);
-    if (msgsnd(msqid, &buf, len + 1, 0) == -1) /* +1 for '\0' */
-        perror("msgsnd");
-
-    if (msgctl(msqid, IPC_RMID, NULL) == -1)
-    {
-        perror("msgctl");
-        exit(1);
-    }
-}
